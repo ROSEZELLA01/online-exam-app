@@ -1,5 +1,6 @@
 const Exam = require('../models/Exam');
 const Question = require('../models/Question');
+const Submission = require('../models/Submission');
 
 // @desc    Create a new exam (Admin only)
 // @route   POST /api/exams
@@ -111,9 +112,80 @@ const getExams = async (req, res) => {
   }
 };
 
+// @desc    Get complete exam results & student analytics (Admin only)
+// @route   GET /api/exams/:examId/results
+// @access  Private (Admin)
+const getExamAnalytics = async (req, res) => {
+  try {
+    const { examId } = req.params;
+
+    const exam = await Exam.findById(examId);
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found' });
+    }
+
+    // Retrieve all completed or submitted attempts for this exam
+    const submissions = await Submission.find({ examId })
+      .populate('studentId', 'name email')
+      .sort('-submittedAt');
+
+    const totalSubmissions = submissions.length;
+
+    // Calculate aggregated metrics
+    let totalScoreSum = 0;
+    let totalPassed = 0;
+
+    const studentResults = submissions.map((sub) => {
+      totalScoreSum += sub.score;
+      if (sub.passed) totalPassed += 1;
+
+      return {
+        submissionId: sub._id,
+        student: {
+          id: sub.studentId?._id,
+          name: sub.studentId?.name || 'Unknown',
+          email: sub.studentId?.email || 'N/A'
+        },
+        score: sub.score,
+        totalMarks: sub.totalMarks,
+        passed: sub.passed,
+        status: sub.status,
+        startedAt: sub.startedAt,
+        submittedAt: sub.submittedAt
+      };
+    });
+
+    const averageScore = totalSubmissions > 0 ? (totalScoreSum / totalSubmissions).toFixed(2) : 0;
+    const passRate = totalSubmissions > 0 ? `${((totalPassed / totalSubmissions) * 100).toFixed(1)}%` : '0%';
+
+    res.status(200).json({
+      success: true,
+      data: {
+        exam: {
+          id: exam._id,
+          title: exam.title,
+          totalMarks: exam.totalMarks,
+          passMarks: exam.passMarks
+        },
+        analytics: {
+          totalAttempts: totalSubmissions,
+          passedCount: totalPassed,
+          failedCount: totalSubmissions - totalPassed,
+          passRate,
+          averageScore: Number(averageScore)
+        },
+        submissions: studentResults
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createExam,
   addQuestions,
   togglePublishExam,
-  getExams
+  getExams,
+  getExamAnalytics
 };
