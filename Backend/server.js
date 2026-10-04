@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
+const examRoutes = require('./routes/examRoutes');
 
 dotenv.config();
 
@@ -16,9 +17,11 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/exams', examRoutes);
 
 // Base Route
 app.get('/api/health', (req, res) => {
