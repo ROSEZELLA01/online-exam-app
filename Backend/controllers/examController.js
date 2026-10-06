@@ -99,16 +99,53 @@ const togglePublishExam = async (req, res) => {
 
 // @desc    Get published exams (Students & Admin)
 // @route   GET /api/exams
+// @access  
+// @desc    Get exams with search, published filtering, and pagination (Rule 12)
+// @route   GET /api/exams?search=keyword&page=1&limit=10
 // @access  Private
 const getExams = async (req, res) => {
   try {
-    // Admins see all exams; students only see published ones
-    const filter = req.user.role === 'admin' ? {} : { isPublished: true };
-    const exams = await Exam.find(filter).populate('createdBy', 'name email').sort('-createdAt');
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || '';
 
-    res.status(200).json({ success: true, count: exams.length, data: exams });
+    // Search query by title or description
+    const query = {};
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Role-based visibility
+    if (req.user.role !== 'admin') {
+      query.isPublished = true;
+    }
+
+    const totalRecords = await Exam.countDocuments(query);
+    const exams = await Exam.find(query)
+      .populate('createdBy', 'name email')
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      success: true,
+      message: 'Exams retrieved successfully',
+      data: {
+        exams,
+        pagination: {
+          totalRecords,
+          totalPages: Math.ceil(totalRecords / limit),
+          currentPage: page,
+          limit
+        }
+      }
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message, data: null });
   }
 };
 
