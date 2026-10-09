@@ -130,83 +130,112 @@ const startExam = async (req, res) => {
     });
   }
 };
-// @desc    Grade & finalize exam submission by examId (Student)
+
+
+// @desc    Submit an exam attempt and grade answers
 // @route   POST /api/submissions/:examId/submit
 // @access  Private (Student)
 const submitExam = async (req, res) => {
   try {
-    const { examId } = req.params;
-    const { answers } = req.body; // Array format: [{ questionId, selectedOptionIndex }]
+    const paramId = req.params.examId; // Could be examId OR submissionId depending on frontend
+    const studentId = req.user._id;
+    const { answers = [] } = req.body;
 
-    // Locate the student's in-progress attempt using JWT user ID and examId
-    const submission = await Submission.findOne({
-      examId,
-      studentId: req.user._id,
-      status: 'in-progress'
-    });
+    // 1. Try finding by examId first, or by submissionId if that's what was passed
+    let submission = await Submission.findOne({
+      studentId,
+      $or: [{ examId: paramId }, { _id: paramId }]
+    }).sort('-startedAt');
 
     if (!submission) {
       return res.status(404).json({
-        message: 'No active exam attempt found for this exam'
+        success: false,
+        message: 'No submission record found for this exam or submission ID',
+        data: null
       });
     }
 
-    const exam = await Exam.findById(examId);
+    // 2. Fetch the exam record using submission.examId
+    const exam = await Exam.findById(submission.examId);
     if (!exam) {
-      return res.status(404).json({ message: 'Exam not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Associated exam not found',
+        data: null
+      });
     }
 
-    const now = new Date();
+    // 3. Resolve questions list (embedded or separate Question model)
+    let questionsList = [];
+    if (Array.isArray(exam.questions) && exam.questions.length > 0) {
+      questionsList = exam.questions;
+    } else {
+      try {
+        const Question = require('../models/Question');
+        questionsList = await Question.find({ examId: exam._id });
+      } catch (e) {
+        questionsList = [];
+      }
+    }
 
-    // Server-side timing check: exam duration + 2-minute latency buffer
-    const allowedDurationMs = (exam.duration + 2) * 60 * 1000;
-    const elapsedMs = now.getTime() - new Date(submission.startedAt).getTime();
-    const isTimedOut = elapsedMs > allowedDurationMs;
+    // 4. Calculate total marks available
+    const totalExamMarks =
+      exam.totalMarks ||
+      questionsList.reduce((acc, q) => acc + (q.points || 1), 0);
 
-    // Load original questions with correctOptionIndex from the database for grading
-    const questions = await Question.find({ examId });
-    const questionMap = new Map();
-    questions.forEach((q) => questionMap.set(q._id.toString(), q));
+    // 5. Grade the submitted answers
+    let totalScore = 0;
+    const gradedAnswers = answers.map((ans) => {
+      const question = questionsList.find(
+        (q) => q._id.toString() === ans.questionId?.toString()
+      );
 
-    let finalScore = 0;
-    const gradedAnswers = (answers || []).map((ans) => {
-      const q = questionMap.get(ans.questionId);
-      if (!q) return null;
+      let isCorrect = false;
+      let pointsAwarded = 0;
 
-      const isCorrect = q.correctOptionIndex === ans.selectedOptionIndex;
-      const pointsAwarded = isCorrect ? q.points : 0;
-      finalScore += pointsAwarded;
+      if (question && question.correctOptionIndex === ans.selectedOptionIndex) {
+        isCorrect = true;
+        pointsAwarded = question.points || 1;
+        totalScore += pointsAwarded;
+      }
 
       return {
-        questionId: q._id,
+        questionId: ans.questionId,
         selectedOptionIndex: ans.selectedOptionIndex,
         isCorrect,
         pointsAwarded
       };
-    }).filter(Boolean);
+    });
 
+    // 6. Update and finalize submission
     submission.answers = gradedAnswers;
-    submission.score = finalScore;
-    submission.submittedAt = now;
-    submission.passed = finalScore >= exam.passMarks;
-    submission.status = isTimedOut ? 'timed-out' : 'submitted';
+    submission.score = totalScore;
+    submission.totalMarks = totalExamMarks;
+    submission.passed = totalScore >= (exam.passMarks || 0);
+    submission.status = 'submitted';
+    submission.submittedAt = new Date();
 
     await submission.save();
 
+    // 7. Return graded scorecard
     res.status(200).json({
       success: true,
-      message: isTimedOut ? 'Exam submitted past deadline (timed-out)' : 'Exam submitted successfully',
-      result: {
+      message: 'Exam submitted successfully',
+      data: {
         submissionId: submission._id,
         score: submission.score,
-        totalMarks: exam.totalMarks,
-        passMarks: exam.passMarks,
+        totalMarks: submission.totalMarks,
+        passMarks: exam.passMarks || 0,
         passed: submission.passed,
         status: submission.status
       }
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      data: null
+    });
   }
 };
 
