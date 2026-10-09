@@ -1,27 +1,21 @@
-
-
-// const connectDB = async () => {
-//   try {
-//     const conn = await mongoose.connect(process.env.MONGO_URI);
-//     console.log(`MongoDB Connected: ${conn.connection.host}`);
-//   } catch (error) {
-//     console.error(`Database Connection Error: ${error.message}`);
-//     process.exit(1);
-//   }
-// };
-
 const mongoose = require('mongoose');
+const dns = require('node:dns');
+
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 const connectDB = async () => {
   try {
+    if (!process.env.MONGO_URI) {
+      throw new Error('MONGO_URI is not defined in your .env file');
+    }
+
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 10000, // 10 seconds timeout
-      socketTimeoutMS: 45000,
-      family: 4 // Force IPv4 (prevents IPv6 routing failure on local modems)
+      serverSelectionTimeoutMS: 10000,
     });
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
+
+    console.log('MongoDB Connected: ' + conn.connection.host);
   } catch (error) {
-    console.error(`Database Connection Error: ${error.message}`);
+    console.error('Database Connection Error:', error);
     process.exit(1);
   }
 };
