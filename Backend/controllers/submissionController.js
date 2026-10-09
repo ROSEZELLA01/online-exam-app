@@ -2,55 +2,121 @@ const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const Question = require('../models/Question');
 
-// @desc    Start an exam attempt (Student)
+// @desc    Start an exam attempt
 // @route   POST /api/submissions/:examId/start
 // @access  Private (Student)
 const startExam = async (req, res) => {
   try {
     const { examId } = req.params;
+    const studentId = req.user._id;
 
     const exam = await Exam.findById(examId);
     if (!exam || !exam.isPublished) {
-      return res.status(404).json({ message: 'Exam is unavailable or not published' });
-    }
-
-    // Check if the student already has an active or completed attempt
-    const existingSubmission = await Submission.findOne({
-      examId,
-      studentId: req.user._id
-    });
-
-    if (existingSubmission) {
-      return res.status(400).json({
-        message: 'Exam already attempted or currently in progress',
-        submissionId: existingSubmission._id,
-        status: existingSubmission.status
+      return res.status(404).json({
+        success: false,
+        message: 'Exam not found or not currently available',
+        data: null
       });
     }
 
-    // Fetch questions without leaking the correct answer index to the frontend
-    const questions = await Question.find({ examId }).select('-correctOptionIndex');
+    // Check for existing submissions
+    let existingSubmission = await Submission.findOne({ examId, studentId });
 
-    if (questions.length === 0) {
-      return res.status(400).json({ message: 'Exam has no questions' });
+    if (existingSubmission) {
+      // If already submitted, prevent re-entry
+      if (existingSubmission.status === 'submitted') {
+        return res.status(400).json({
+          success: false,
+          message: 'Exam already submitted. Retakes are not permitted.',
+          data: null
+        });
+      }
+
+      // If in-progress, check if time has elapsed
+      if (existingSubmission.status === 'in-progress') {
+        const examDurationMs = (exam.duration || 30) * 60 * 1000;
+        const timeElapsed = Date.now() - new Date(existingSubmission.startedAt).getTime();
+
+        if (timeElapsed > examDurationMs) {
+          // Time expired while tab was closed: auto-finalize with 0 / current answers
+          existingSubmission.status = 'submitted';
+          existingSubmission.submittedAt = new Date(
+            new Date(existingSubmission.startedAt).getTime() + examDurationMs
+          );
+          existingSubmission.score = existingSubmission.score || 0;
+          existingSubmission.passed = existingSubmission.score >= exam.passMarks;
+          await existingSubmission.save();
+
+          return res.status(400).json({
+            success: false,
+            message: 'Your previous exam attempt expired and has been automatically submitted.',
+            data: null
+          });
+        }
+
+        // Optional resume: if time remains, return questions with remaining time
+        const remainingSeconds = Math.max(
+          0,
+          Math.floor((examDurationMs - timeElapsed) / 1000)
+        );
+
+        const questions = exam.questions.map((q) => ({
+          _id: q._id,
+          examId: exam._id,
+          questionText: q.questionText,
+          options: q.options,
+          points: q.points
+        }));
+
+        return res.status(200).json({
+          success: true,
+          message: 'Resuming existing in-progress exam attempt',
+          data: {
+            submissionId: existingSubmission._id,
+            startedAt: existingSubmission.startedAt,
+            durationMinutes: exam.duration,
+            remainingSeconds,
+            questions
+          }
+        });
+      }
     }
 
-    const submission = await Submission.create({
+    // Create fresh attempt
+    const newSubmission = await Submission.create({
       examId,
-      studentId: req.user._id,
-      totalMarks: exam.totalMarks,
-      answers: []
+      studentId,
+      startedAt: new Date(),
+      status: 'in-progress',
+      answers: [],
+      score: 0,
+      totalMarks: exam.totalMarks
     });
+
+    const questions = exam.questions.map((q) => ({
+      _id: q._id,
+      examId: exam._id,
+      questionText: q.questionText,
+      options: q.options,
+      points: q.points
+    }));
 
     res.status(201).json({
       success: true,
-      submissionId: submission._id,
-      startedAt: submission.startedAt,
-      durationMinutes: exam.duration,
-      questions
+      message: 'Exam started successfully',
+      data: {
+        submissionId: newSubmission._id,
+        startedAt: newSubmission.startedAt,
+        durationMinutes: exam.duration,
+        questions
+      }
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      data: null
+    });
   }
 };
 
@@ -161,8 +227,58 @@ const getSubmissionResult = async (req, res) => {
   }
 };
 
+// @desc    Get all exam submissions for the authenticated student
+// @route   GET /api/submissions/mine
+// @access  Private (Student)
+const getMySubmissions = async (req, res) => {
+  try {
+    const submissions = await Submission.find({ studentId: req.user._id })
+      .populate('examId', 'title description duration totalMarks passMarks');
+
+    // Auto-resolve any abandoned in-progress attempts
+    const now = Date.now();
+    for (let sub of submissions) {
+      if (sub.status === 'in-progress' && sub.examId) {
+        const durationMs = (sub.examId.duration || 30) * 60 * 1000;
+        const elapsed = now - new Date(sub.startedAt).getTime();
+        if (elapsed > durationMs) {
+          sub.status = 'submitted';
+          sub.submittedAt = new Date(new Date(sub.startedAt).getTime() + durationMs);
+          sub.score = sub.score || 0;
+          sub.passed = sub.score >= (sub.examId.passMarks || 0);
+          await sub.save();
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Student submissions retrieved successfully',
+      data: submissions.map((sub) => ({
+        submissionId: sub._id,
+        examId: sub.examId?._id || sub.examId,
+        examTitle: sub.examId?.title || 'Unknown Exam',
+        score: sub.score,
+        totalMarks: sub.totalMarks,
+        passMarks: sub.examId?.passMarks || 0,
+        passed: sub.passed,
+        status: sub.status,
+        startedAt: sub.startedAt,
+        submittedAt: sub.submittedAt
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      data: null
+    });
+  }
+};
+
 module.exports = {
   startExam,
   submitExam,
-  getSubmissionResult
+  getSubmissionResult,
+  getMySubmissions
 };
