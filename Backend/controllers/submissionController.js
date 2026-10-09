@@ -2,7 +2,8 @@ const Submission = require('../models/Submission');
 const Exam = require('../models/Exam');
 const Question = require('../models/Question');
 
-// @desc    Start an exam attempt
+
+// @desc    Start or resume an exam attempt
 // @route   POST /api/submissions/:examId/start
 // @access  Private (Student)
 const startExam = async (req, res) => {
@@ -19,11 +20,38 @@ const startExam = async (req, res) => {
       });
     }
 
+    // Helper to safely format questions without exposing correctOptionIndex
+    const formatQuestions = (questionList) => {
+      if (!Array.isArray(questionList)) return [];
+      return questionList.map((q) => ({
+        _id: q._id,
+        examId: exam._id,
+        questionText: q.questionText,
+        options: q.options || [],
+        points: q.points || 1
+      }));
+    };
+
+    // If questions are embedded on the exam document, use them; otherwise query Question model if applicable
+    let examQuestions = [];
+    if (Array.isArray(exam.questions)) {
+      examQuestions = formatQuestions(exam.questions);
+    } else {
+      // If Question is a separate model in your codebase:
+      try {
+        const Question = require('../models/Question'); // Adjust path if needed
+        const questionsFromDb = await Question.find({ examId });
+        examQuestions = formatQuestions(questionsFromDb);
+      } catch (e) {
+        examQuestions = [];
+      }
+    }
+
     // Check for existing submissions
     let existingSubmission = await Submission.findOne({ examId, studentId });
 
     if (existingSubmission) {
-      // If already submitted, prevent re-entry
+      // If already submitted, prevent restart
       if (existingSubmission.status === 'submitted') {
         return res.status(400).json({
           success: false,
@@ -38,13 +66,12 @@ const startExam = async (req, res) => {
         const timeElapsed = Date.now() - new Date(existingSubmission.startedAt).getTime();
 
         if (timeElapsed > examDurationMs) {
-          // Time expired while tab was closed: auto-finalize with 0 / current answers
           existingSubmission.status = 'submitted';
           existingSubmission.submittedAt = new Date(
             new Date(existingSubmission.startedAt).getTime() + examDurationMs
           );
           existingSubmission.score = existingSubmission.score || 0;
-          existingSubmission.passed = existingSubmission.score >= exam.passMarks;
+          existingSubmission.passed = existingSubmission.score >= (exam.passMarks || 0);
           await existingSubmission.save();
 
           return res.status(400).json({
@@ -54,19 +81,11 @@ const startExam = async (req, res) => {
           });
         }
 
-        // Optional resume: if time remains, return questions with remaining time
+        // Resuming within time limit
         const remainingSeconds = Math.max(
           0,
           Math.floor((examDurationMs - timeElapsed) / 1000)
         );
-
-        const questions = exam.questions.map((q) => ({
-          _id: q._id,
-          examId: exam._id,
-          questionText: q.questionText,
-          options: q.options,
-          points: q.points
-        }));
 
         return res.status(200).json({
           success: true,
@@ -76,7 +95,7 @@ const startExam = async (req, res) => {
             startedAt: existingSubmission.startedAt,
             durationMinutes: exam.duration,
             remainingSeconds,
-            questions
+            questions: examQuestions
           }
         });
       }
@@ -90,16 +109,8 @@ const startExam = async (req, res) => {
       status: 'in-progress',
       answers: [],
       score: 0,
-      totalMarks: exam.totalMarks
+      totalMarks: exam.totalMarks || 0
     });
-
-    const questions = exam.questions.map((q) => ({
-      _id: q._id,
-      examId: exam._id,
-      questionText: q.questionText,
-      options: q.options,
-      points: q.points
-    }));
 
     res.status(201).json({
       success: true,
@@ -108,7 +119,7 @@ const startExam = async (req, res) => {
         submissionId: newSubmission._id,
         startedAt: newSubmission.startedAt,
         durationMinutes: exam.duration,
-        questions
+        questions: examQuestions
       }
     });
   } catch (error) {
@@ -119,7 +130,6 @@ const startExam = async (req, res) => {
     });
   }
 };
-
 // @desc    Grade & finalize exam submission by examId (Student)
 // @route   POST /api/submissions/:examId/submit
 // @access  Private (Student)
