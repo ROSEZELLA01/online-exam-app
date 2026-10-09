@@ -1,6 +1,6 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext.jsx';
+import { useAuth } from '../Context/AuthContext.jsx';
 
 export default function Login() {
   const { role, signIn } = useAuth();
@@ -23,7 +23,7 @@ export default function Login() {
     </div>
     <label className="field-label" htmlFor="email">Email address</label><input className="login-input" id="email" type="email" autoComplete="email" placeholder="you@university.edu" required />
     <label className="field-label" htmlFor="password">Password</label><input className="login-input" id="password" type="password" autoComplete="current-password" placeholder="Enter your password" required />
-    <button className="button button-primary login-submit" type="submit">Sign in as {selectedRole} <span aria-hidden="true">→</span></button>
+    <button className="button button-primary login-submit" type="submit">Sign in as {selectedRole} <span aria-hidden="true">â†’</span></button>
     <p className="demo-note login-demo-note">Demo setup: sign-in records the selected role in this browser. Add a backend to verify credentials securely.</p>
   </form></section>;
 }

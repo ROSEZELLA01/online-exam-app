@@ -1,13 +1,13 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
-import AppLayout from './components/AppLayout.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Exams from './pages/Exams.jsx';
-import CreateQuestion from './pages/CreateQuestion.jsx';
-import Results from './pages/Results.jsx';
-import NotFound from './pages/NotFound.jsx';
-import Login from './pages/Login.jsx';
-import Reading from './pages/Reading.jsx';
-import { useAuth } from './context/AuthContext.jsx';
+﻿import { Navigate, Route, Routes } from 'react-router-dom';
+import AppLayout from './Components/AppLayout.jsx';
+import Dashboard from './Pages/Dashboard.jsx';
+import Exams from './Pages/Exams.jsx';
+import CreateQuestion from './Pages/CreateQuestion.jsx';
+import Results from './Pages/Results.jsx';
+import NotFound from './Pages/NotFound.jsx';
+import Login from './Pages/Login.jsx';
+import Reading from './Pages/Reading.jsx';
+import { useAuth } from './Context/AuthContext.jsx';
 
 function RoleRoute({ allowed, children }) {
   const { role } = useAuth();
